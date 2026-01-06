@@ -1,32 +1,59 @@
-/**
- * Import function triggers from their respective submodules:
- *
- * const {onCall} = require("firebase-functions/v2/https");
- * const {onDocumentWritten} = require("firebase-functions/v2/firestore");
- *
- * See a full list of supported triggers at https://firebase.google.com/docs/functions
- */
+const functions = require("firebase-functions");
+const fetch = require("node-fetch");
 
-const {setGlobalOptions} = require("firebase-functions");
-const {onRequest} = require("firebase-functions/https");
-const logger = require("firebase-functions/logger");
+exports.askGemini = functions.https.onRequest(async (req, res) => {
+  try {
+    const { userQuestion, dbQuestions } = req.body;
 
-// For cost control, you can set the maximum number of containers that can be
-// running at the same time. This helps mitigate the impact of unexpected
-// traffic spikes by instead downgrading performance. This limit is a
-// per-function limit. You can override the limit for each function using the
-// `maxInstances` option in the function's options, e.g.
-// `onRequest({ maxInstances: 5 }, (req, res) => { ... })`.
-// NOTE: setGlobalOptions does not apply to functions using the v1 API. V1
-// functions should each use functions.runWith({ maxInstances: 10 }) instead.
-// In the v1 API, each function can only serve one request per container, so
-// this will be the maximum concurrent request count.
-setGlobalOptions({ maxInstances: 10 });
+    if (!userQuestion || !dbQuestions) {
+      return res.status(400).json({ error: "Missing data" });
+    }
 
-// Create and deploy your first functions
-// https://firebase.google.com/docs/functions/get-started
+    const apiKey = "AIzaSyA5HPWuI6JrwcswmqBSQbtdzg9lvuVwnFU";
 
-// exports.helloWorld = onRequest((request, response) => {
-//   logger.info("Hello logs!", {structuredData: true});
-//   response.send("Hello from Firebase!");
-// });
+    const dbText = dbQuestions
+      .map(q => `Q: ${q.question} | A: ${q.answer}`)
+      .join("\n");
+
+    const prompt = `
+You are an AI assistant for a college help platform.
+
+A student has asked the following question:
+"${userQuestion}"
+
+Below is a list of existing college questions with answers:
+${dbText}
+
+Task:
+1. Check if the student question is semantically similar in meaning to any of the existing questions.
+2. If a similar question exists, return ONLY the answer of the best matching question.
+3. Rewrite the answer in very simple, student-friendly English.
+4. If no relevant question exists, respond with exactly: NO_MATCH
+`;
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }]
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!data.candidates) {
+      return res.json({ result: "NO_MATCH" });
+    }
+
+    const text =
+      data.candidates[0].content.parts[0].text.trim();
+
+    return res.json({ result: text });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Gemini error" });
+  }
+});
